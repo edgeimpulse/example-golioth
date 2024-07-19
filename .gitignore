@@ -1,0 +1,24 @@
+build/
+sdkconfig
+sdkconfig.old
+build.tar.gz
+credentials.yml
+credentials.inc
+.cache
+.DS_Store
+.vscode
+firebase-debug.log
+mtb_shared
+*.key
+*.pem
+
+# Tag files
+tags
+tags.lock
+tags.temp
+__pycache__
+
+# Edge Impulse generated
+edge-impulse-sdk/
+model-paramters/
+tflite-model/
