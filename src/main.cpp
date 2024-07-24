@@ -18,10 +18,17 @@ LOG_MODULE_REGISTER(ei_glth, LOG_LEVEL_DBG);
 
 #include <golioth/client.h>
 #include <golioth/stream.h>
+#include <golioth/fw_update.h>
 #include <samples/common/sample_credentials.h>
 #include <string.h>
 
 #include <samples/common/net_connect.h>
+
+#include <app_version.h>
+
+/* Current firmware version; update in VERSION */
+static const char *_current_version =
+    STRINGIFY(APP_VERSION_MAJOR) "." STRINGIFY(APP_VERSION_MINOR) "." STRINGIFY(APP_PATCHLEVEL);
 
 struct golioth_client *client;
 static K_SEM_DEFINE(connected, 0, 1);
@@ -125,6 +132,9 @@ int main()
     golioth_client_register_event_callback(client, on_client_event, NULL);
 
     k_sem_take(&connected, K_FOREVER);
+
+    /* Setup OTA. */
+    golioth_fw_update_init(client, _current_version);
 
     GLTH_LOGD(TAG, "Configuring button interrupts.");
     /* Configure button interrupt. */
