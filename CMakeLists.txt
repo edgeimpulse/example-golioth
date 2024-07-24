@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.13.1)
 
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(PM_STATIC_YML_FILE ${CMAKE_CURRENT_LIST_DIR}/pm_static.yml)
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 
