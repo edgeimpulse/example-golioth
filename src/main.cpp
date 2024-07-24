@@ -7,13 +7,17 @@
 #include <zephyr/kernel.h>
 #include <zephyr/drivers/sensor.h>
 #include <zephyr/device.h>
+#include <zephyr/drivers/gpio.h>
+#include <zcbor_encode.h>
 #include "edge-impulse-sdk/classifier/ei_run_classifier.h"
 #include "edge-impulse-sdk/dsp/numpy.hpp"
+#include "model_metadata.h"
 
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(ei_glth, LOG_LEVEL_DBG);
 
 #include <golioth/client.h>
+#include <golioth/stream.h>
 #include <samples/common/sample_credentials.h>
 #include <string.h>
 
@@ -34,6 +38,17 @@ static void on_client_event(struct golioth_client *client,
     GLTH_LOGI(TAG, "Golioth client %s", is_connected ? "connected" : "disconnected");
 }
 
+#define SW_0 DT_ALIAS(sw0)
+static const struct gpio_dt_spec btn = GPIO_DT_SPEC_GET_OR(SW_0, gpios, {0});
+static struct gpio_callback btn_cb_data;
+static K_SEM_DEFINE(btn_press, 0, 1);
+
+void btn_pressed(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
+{
+    GLTH_LOGD(TAG, "Button pressed.");
+    k_sem_give(&btn_press);
+}
+
 const struct device *accel = DEVICE_DT_GET_ONE(adi_adxl362);
 
 static float readings[EI_CLASSIFIER_DSP_INPUT_FRAME_SIZE];
@@ -45,8 +60,9 @@ int sample_accel(size_t offset, size_t length, float *out_ptr)
         GLTH_LOGE(TAG, "Unexpected features length: %d", length);
         return 1;
     }
-    size_t i = 0;
-    while (i < length)
+    GLTH_LOGD(TAG, "Collecting %u samples.", length);
+    size_t i = offset;
+    while (i - offset < length)
     {
         int err = sensor_sample_fetch(accel);
         if (err)
@@ -67,12 +83,33 @@ int sample_accel(size_t offset, size_t length, float *out_ptr)
         /* Sample at 62.5 Hz */
         k_sleep(K_MSEC(16));
     }
-    memcpy(out_ptr, readings, length * sizeof(float));
+    memcpy(out_ptr, readings + offset, length * sizeof(float));
     return 0;
+}
+
+enum golioth_status upload_accel_readings(uint32_t block_idx,
+                                          uint8_t *block_buffer,
+                                          size_t *block_size,
+                                          bool *is_last,
+                                          void *arg)
+{
+    uint32_t offset = block_idx * *block_size;
+    uint32_t remaining = EI_CLASSIFIER_DSP_INPUT_FRAME_SIZE * sizeof(float) - offset;
+    if (remaining <= *block_size)
+    {
+        *block_size = remaining;
+        *is_last = true;
+    }
+
+    GLTH_LOGI(TAG, "Uploading accelerometer readings [idx: %u] [rem: %u]", block_idx, remaining);
+    memcpy(block_buffer, (uint8_t *) readings + offset, *block_size);
+    return GOLIOTH_OK;
 }
 
 int main()
 {
+    int err;
+
     GLTH_LOGD(TAG, "Starting Edge Impulse Golioth example...");
 
     net_connect();
@@ -89,10 +126,38 @@ int main()
 
     k_sem_take(&connected, K_FOREVER);
 
+    GLTH_LOGD(TAG, "Configuring button interrupts.");
+    /* Configure button interrupt. */
+    err = gpio_pin_configure_dt(&btn, GPIO_INPUT);
+    if (err)
+    {
+        GLTH_LOGE(TAG, "Error %d: failed to configure %s pin %d", err, btn.port->name, btn.pin);
+        return err;
+    }
+
+    err = gpio_pin_interrupt_configure_dt(&btn, GPIO_INT_EDGE_TO_ACTIVE);
+    if (err)
+    {
+        GLTH_LOGE(TAG,
+                  "Error %d: failed to configure interrupt on %s pin %d",
+                  err,
+                  btn.port->name,
+                  btn.pin);
+        return err;
+    }
+
+    GLTH_LOGD(TAG, "Registering button interrupt handlers.");
+    /* Register interrupt handler. */
+    gpio_init_callback(&btn_cb_data, btn_pressed, BIT(btn.pin));
+    gpio_add_callback(btn.port, &btn_cb_data);
+
     ei_impulse_result_t result = {0};
+
+    GLTH_LOGI(TAG, "Press button to sample data.");
 
     while (1)
     {
+        k_sem_take(&btn_press, K_FOREVER);
         signal_t features_signal;
         features_signal.total_length = EI_CLASSIFIER_DSP_INPUT_FRAME_SIZE;
         features_signal.get_data = &sample_accel;
@@ -105,13 +170,63 @@ int main()
             return 1;
         }
 
+        uint8_t buf[EI_CLASSIFIER_LABEL_COUNT * 20] = {0};
+
+        ZCBOR_STATE_E(zse, 1, buf, sizeof(buf), EI_CLASSIFIER_LABEL_COUNT);
+        bool ok = zcbor_map_start_encode(zse, 1);
+        if (!ok)
+        {
+            GLTH_LOGE(TAG, "Failed to start encoding map.");
+            return 1;
+        }
         for (size_t ix = 0; ix < EI_CLASSIFIER_LABEL_COUNT; ix++)
         {
+            ok = zcbor_tstr_put_term(zse, result.classification[ix].label);
+            if (!ok)
+            {
+                GLTH_LOGE(TAG, "Failed to encode label name.");
+                return 1;
+            }
+
+            ok = zcbor_float32_put(zse, result.classification[ix].value);
+            if (!ok)
+            {
+                GLTH_LOGE(TAG, "Failed to encode label value.");
+                return 1;
+            }
             GLTH_LOGI(TAG,
                       "%s: %.5f\n",
                       result.classification[ix].label,
                       result.classification[ix].value);
         }
-        k_sleep(K_SECONDS(10));
+
+        ok = zcbor_map_end_encode(zse, 1);
+        if (!ok)
+        {
+            GLTH_LOGE(TAG, "Failed to close map.");
+            return 1;
+        }
+        GLTH_LOGD(TAG, "Uploading classification results.");
+        err = golioth_stream_set_sync(client,
+                                      "class",
+                                      GOLIOTH_CONTENT_TYPE_CBOR,
+                                      buf,
+                                      (intptr_t) zse->payload - (intptr_t) buf,
+                                      5);
+        if (err)
+        {
+            GLTH_LOGE(TAG, "Failed streaming classification results.");
+        }
+
+        GLTH_LOGD(TAG, "Uploading accelerometer readings.");
+        err = golioth_stream_set_blockwise_sync(client,
+                                                "accel",
+                                                GOLIOTH_CONTENT_TYPE_OCTET_STREAM,
+                                                upload_accel_readings,
+                                                NULL);
+        if (err)
+        {
+            GLTH_LOGE(TAG, "Failed streaming accelerometer readings.");
+        }
     }
 }
