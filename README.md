@@ -134,3 +134,27 @@ Golioth console.
 Accelerometer data is uploaded as an array of floats representing X-Y-Z position
 data. Each sampling will result in a new object being created in the specified
 S3 bucket.
+
+## Contributing
+
+Pull requests and issues can be submitted at
+https://github.com/golioth/example-edge-impulse. Code changes will be mirrored
+to https://github.com/edgeimpulse/example-golioth.
+
+### Developer Certificate of Origin Process
+
+This project will only accept contributions using the Developer’s Certificate of
+Origin 1.1 located at https://developercertificate.org (“DCO”). The DCO is a
+legally binding statement asserting that you are the creator of your
+contribution, or that you otherwise have the authority to distribute the
+contribution, and that you are intentionally making the contribution available
+under the license associated with the Project ("License").
+
+You can agree to the DCO in your contribution by using a “Signed-off-by” line at
+the end of your commit message. You should only submit a contribution if you are
+willing to agree to the DCO terms. If you are willing, just add a line to the
+end of every git commit message:
+
+```
+Signed-off-by: Jane Smith <jane.smith@email.com>
+```
