@@ -19,6 +19,7 @@ tags.temp
 __pycache__
 
 # Edge Impulse generated
+ei-generated/
 edge-impulse-sdk/
 model-paramters/
 tflite-model/
