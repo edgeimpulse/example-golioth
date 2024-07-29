@@ -1,0 +1,12 @@
+filter:
+  path: "/accel"
+steps:
+  - name: send-s3
+    destination:
+      type: aws-s3
+      version: v1
+      parameters:
+        name: <my-bucket-name>
+        access_key: $AWS_ACCESS_KEY
+        access_secret: $AWS_SECRET_KEY
+        region: <my-bucket-region>

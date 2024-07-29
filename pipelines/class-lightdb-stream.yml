@@ -1,0 +1,11 @@
+filter:
+  path: "/class"
+  content_type: application/cbor
+steps:
+  - name: convert-send
+    transformer:
+      type: cbor-to-json
+      version: v1
+    destination:
+      type: lightdb-stream
+      version: v1
